@@ -282,6 +282,14 @@ class PlayerViewModel(
   private val _isSeekingForwards = MutableStateFlow(false)
   val isSeekingForwards: StateFlow<Boolean> = _isSeekingForwards.asStateFlow()
 
+  /**
+   * Text of the transient badge shown in the middle of the screen while the remote's seek keys
+   * (D-pad left/right, rewind/fast-forward) are used. Format is "position / duration" and it is
+   * null whenever the badge should be hidden.
+   */
+  private val _seekTimeOverlayText = MutableStateFlow<String?>(null)
+  val seekTimeOverlayText: StateFlow<String?> = _seekTimeOverlayText.asStateFlow()
+
   // Frame navigation
   private val _currentFrame = MutableStateFlow(0)
   val currentFrame: StateFlow<Int> = _currentFrame.asStateFlow()
@@ -573,8 +581,21 @@ class PlayerViewModel(
     host.context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
   }
 
+  // Seek time badge state. The target is tracked locally instead of reading mpv's time-pos because
+  // mpv only reports the new position once the seek has actually been applied, which would make the
+  // badge lag behind (or jump) during repeated key presses.
+  private var seekOverlayTarget: Int = 0
+  private var seekOverlayLastPressAt: Long = 0L
+  private var seekOverlayHideJob: Job? = null
+
   private companion object {
     const val TAG = "PlayerViewModel"
+
+    /** How long the middle-of-screen "position / duration" badge stays visible after a seek key. */
+    const val SEEK_TIME_OVERLAY_HIDE_MS = 1500L
+
+    /** A key press further apart than this starts a new seek burst from the current position. */
+    const val SEEK_TIME_OVERLAY_CONTINUE_MS = 1500L
     val VALID_SUBTITLE_EXTENSIONS =
       setOf(
         // Common & modern
@@ -972,6 +993,7 @@ class PlayerViewModel(
     }
     _isSeekingForwards.value = false
     seekBy(-doubleTapToSeekDuration)
+    flashSeekTimeOverlay(-doubleTapToSeekDuration)
     if (playerPreferences.showSeekBarWhenSeeking.get()) showSeekBar()
   }
 
@@ -983,7 +1005,51 @@ class PlayerViewModel(
     }
     _isSeekingForwards.value = true
     seekBy(doubleTapToSeekDuration)
+    flashSeekTimeOverlay(doubleTapToSeekDuration)
     if (playerPreferences.showSeekBarWhenSeeking.get()) showSeekBar()
+  }
+
+  // ==================== Seek time badge ====================
+
+  /**
+   * Shows the "position / duration" badge in the middle of the screen while the remote's seek keys
+   * are used. [deltaSeconds] is the step of the current key press; presses closer together than
+   * [SEEK_TIME_OVERLAY_CONTINUE_MS] accumulate so the badge keeps up with a key-repeat burst
+   * instead of jumping back while mpv is still applying the seek.
+   */
+  private fun flashSeekTimeOverlay(deltaSeconds: Int) {
+    val total = duration ?: 0
+    if (total <= 0) return
+
+    val now = System.currentTimeMillis()
+    if (now - seekOverlayLastPressAt > SEEK_TIME_OVERLAY_CONTINUE_MS) {
+      seekOverlayTarget = pos ?: 0
+    }
+    seekOverlayLastPressAt = now
+    seekOverlayTarget = (seekOverlayTarget + deltaSeconds).coerceIn(0, total)
+
+    _seekTimeOverlayText.value =
+      "${formatOverlayTime(seekOverlayTarget)} / ${formatOverlayTime(total)}"
+
+    seekOverlayHideJob?.cancel()
+    seekOverlayHideJob =
+      viewModelScope.launch {
+        delay(SEEK_TIME_OVERLAY_HIDE_MS)
+        _seekTimeOverlayText.value = null
+      }
+  }
+
+  /** Formats seconds as mm:ss, or h:mm:ss once the value reaches an hour. */
+  private fun formatOverlayTime(seconds: Int): String {
+    val absSeconds = kotlin.math.abs(seconds)
+    val hours = absSeconds / 3600
+    val minutes = (absSeconds % 3600) / 60
+    val secs = absSeconds % 60
+    return if (hours > 0) {
+      java.lang.String.format(java.util.Locale.US, "%d:%02d:%02d", hours, minutes, secs)
+    } else {
+      java.lang.String.format(java.util.Locale.US, "%02d:%02d", minutes, secs)
+    }
   }
 
   fun leftSubSeek() {

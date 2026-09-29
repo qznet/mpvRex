@@ -125,6 +125,7 @@ import xyz.mpv.rex.ui.player.controls.components.LockHint
 import xyz.mpv.rex.ui.player.controls.components.MultipleSpeedPlayerUpdate
 import xyz.mpv.rex.ui.player.controls.components.SeekPlayerUpdate
 import xyz.mpv.rex.ui.player.controls.components.SeekbarWithTimers
+import xyz.mpv.rex.ui.player.controls.components.SeekTimeOverlay
 import xyz.mpv.rex.ui.player.controls.components.SlideToUnlock
 import xyz.mpv.rex.ui.player.controls.components.SpeedControlSlider
 import xyz.mpv.rex.ui.player.controls.components.TextPlayerUpdate
@@ -1886,6 +1887,11 @@ fun PlayerControls(
       panelShown = panel,
       onDismissRequest = { onOpenPanel(Panels.None) },
     )
+
+    // Middle-of-screen "position / duration" badge for the remote's seek keys. Emitted last so it
+    // stays above the controls layer.
+    val seekTimeOverlayText by viewModel.seekTimeOverlayText.collectAsState()
+    SeekTimeOverlay(text = seekTimeOverlayText)
   }
 }
 
